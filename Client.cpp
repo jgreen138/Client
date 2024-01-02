@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#pragma comment (lib, "Ws2_32.lib")
+#pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_BUFLEN 512
 #define FILE_BUFLEN 1024
@@ -36,24 +36,42 @@ int receiveFile(SOCKET serverSocket, const char* fileName) {
     }
 
     char fileBuf[FILE_BUFLEN];
-    int bytesReceived;
+    int bytesReceived = 0;
 
-    do {
-        bytesReceived = recv(serverSocket, fileBuf, sizeof(fileBuf), 0);
-        if (bytesReceived > 0) {
-            fwrite(fileBuf, 1, bytesReceived, file);
-        }
-        else if (bytesReceived == 0) {
-            printf("Connection closed by the server\n");
-        }
-        else {
-            printf("Error receiving file: %d\n", WSAGetLastError());
-            fclose(file);
-            return -1;
-        }
-    } while (bytesReceived > 0);
+
+    bytesReceived = recv(serverSocket, fileBuf, sizeof(fileBuf), 0);
+    if (bytesReceived > 0) {
+        fwrite(fileBuf, 1, bytesReceived, file);
+    }
+    else if (bytesReceived == 0) {
+        printf("Connection closed by the server\n");
+    }
+    else {
+        int error = WSAGetLastError();
+        printf("Error receiving file: %d\n", error);
+
+        // Print more details about the error
+        LPVOID errorMsg;
+        FormatMessage(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+            NULL,
+            error,
+            0, // Default language
+            (LPWSTR)&errorMsg,
+            0,
+            NULL
+        );
+
+        wprintf(L"Error details: %s\n", errorMsg);
+
+        LocalFree(errorMsg);
+
+        fclose(file);
+        return -1;
+    }
 
     fclose(file);
+    // printf("File received successfully from the server.\n");
     return 0;
 }
 
@@ -130,37 +148,63 @@ int main(void) {
         return 1;
     }
 
-    // Get the file name from the user
-    printf("Enter the name of the file to request: ");
-    if (fgets(receivedFilePath, sizeof(receivedFilePath), stdin) == NULL) {
-        printf("Error reading user input\n");
-        closesocket(ConnectSocket);
-        WSACleanup();
-        return 1;
-    }
+    // Main loop to request files until the user decides to exit
+    do {
+        // Get the file name from the user
+        printf("Enter the name of the file to request (or type 'exit' to end): ");
+        if (fgets(receivedFilePath, sizeof(receivedFilePath), stdin) == NULL) {
+            printf("Error reading user input\n");
+            break;  // Exit the loop if input fails
+        }
 
-    // Remove the newline character from the file name
-    len = strlen(receivedFilePath);
-    if (len > 0 && receivedFilePath[len - 1] == '\n') {
-        receivedFilePath[len - 1] = '\0';
-    }
+        // Remove the newline character from the file name
+        len = strlen(receivedFilePath);
+        if (len > 0 && receivedFilePath[len - 1] == '\n') {
+            receivedFilePath[len - 1] = '\0';
+        }
 
-    // Send a request to the server
-    iResult = send(ConnectSocket, receivedFilePath, static_cast<int>(strlen(receivedFilePath)), 0);
-    if (iResult == SOCKET_ERROR) {
-        printf("send failed with error: %d\n", WSAGetLastError());
-        closesocket(ConnectSocket);
-        WSACleanup();
-        return 1;
-    }
+        // Check if the user wants to exit
+        if (strcmp(receivedFilePath, "exit") == 0) {
+            break;  // Exit the loop
+        }
 
-    // Receive the file from the server
-    if (receiveFile(ConnectSocket, receivedFilePath) == -1) {
-        printf("Error receiving file from the server\n");
-        closesocket(ConnectSocket);
-        WSACleanup();
-        return 1;
-    }
+        // Send a request to the server
+        iResult = send(ConnectSocket, receivedFilePath, static_cast<int>(strlen(receivedFilePath)), 0);
+        if (iResult == SOCKET_ERROR) {
+            printf("send failed with error: %d\n", WSAGetLastError());
+            break;  // Exit the loop if send fails
+        }
+
+        printf("File name '%s' sent to the server.\n", receivedFilePath);
+
+        // Receive the file from the server
+        if (receiveFile(ConnectSocket, receivedFilePath) == 0) {
+            printf("File received successfully from the server.\n");
+        }
+        else {
+            printf("Error receiving file from the server.\n");
+            continue;  // Skip the next steps and go back to the beginning of the loop
+        }
+
+        // Offer the user the option to request another file or exit
+        printf("Do you want to request another file? (yes/no): ");
+        char userChoice[10];
+        if (fgets(userChoice, sizeof(userChoice), stdin) == NULL) {
+            printf("Error reading user input\n");
+            break;  // Exit the loop if input fails
+        }
+
+        // Remove the newline character from the user choice
+        len = strlen(userChoice);
+        if (len > 0 && userChoice[len - 1] == '\n') {
+            userChoice[len - 1] = '\0';
+        }
+
+        if (strcmp(userChoice, "no") == 0) {
+            break;  // Exit the loop if the user chooses 'no'
+        }
+
+    } while (true);
 
     // cleanup
     closesocket(ConnectSocket);
