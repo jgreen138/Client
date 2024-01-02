@@ -11,37 +11,50 @@
 #define FILE_BUFLEN 1024
 #define DEFAULT_PORT "27015"
 
-// Function to receive a file from the server
-int receiveFile(SOCKET serverSocket, const char* fileName) {
-    // Construct the full path for the received file based on the client executable location
-    char fullPath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, fullPath, MAX_PATH) == 0) {
-        printf("Error getting module filename\n");
-        return -1;
-    }
+// Function to receive a file from the server or an error message
+int receiveFileOrErrorMessage(SOCKET serverSocket, const char* fileName) {
+    char receivedBuf[DEFAULT_BUFLEN];
+    int bytesReceived = recv(serverSocket, receivedBuf, sizeof(receivedBuf), 0);
 
-    // Remove the filename from the full path
-    char* lastBackslash = strrchr(fullPath, '\\');
-    if (lastBackslash != NULL) {
-        *(lastBackslash + 1) = '\0';  // Null-terminate after the last backslash
-    }
-
-    // Append the received filename to the path
-    strcat_s(fullPath, MAX_PATH, fileName);
-
-    FILE* file;
-    if (fopen_s(&file, fullPath, "wb") != 0) {
-        printf("Error creating file: %s\n", fullPath);
-        return -1;
-    }
-
-    char fileBuf[FILE_BUFLEN];
-    int bytesReceived = 0;
-
-
-    bytesReceived = recv(serverSocket, fileBuf, sizeof(fileBuf), 0);
     if (bytesReceived > 0) {
-        fwrite(fileBuf, 1, bytesReceived, file);
+        // Check if the received data is an error message
+        if (bytesReceived >= 5 && strncmp(receivedBuf, "Error", 5) == 0) {
+            printf("Server Error: %s\n", receivedBuf + 6);  // Print the error message
+            return -1;
+        }
+
+        // Construct the full path for the received file based on the client executable location
+        char fullPath[MAX_PATH];
+        if (GetModuleFileNameA(NULL, fullPath, MAX_PATH) == 0) {
+            printf("Error getting module filename\n");
+            return -1;
+        }
+
+        // Remove the filename from the full path
+        char* lastBackslash = strrchr(fullPath, '\\');
+        if (lastBackslash != NULL) {
+            *(lastBackslash + 1) = '\0';  // Null-terminate after the last backslash
+        }
+
+        // Append the received filename to the path
+        strcat_s(fullPath, MAX_PATH, fileName);
+
+        FILE* file;
+        if (strncmp(receivedBuf, "File not found:", 15) == 0) {
+            printf("File not found by the server: %s\n", receivedBuf + 15);
+            return -1;
+        }
+
+        if (fopen_s(&file, fullPath, "wb") != 0) {
+            printf("Error creating file: %s\n", fullPath);
+            return -1;
+        }
+
+        fwrite(receivedBuf, 1, bytesReceived, file);
+
+        fclose(file);
+        printf("File received successfully from the server.\n");
+        return 0;
     }
     else if (bytesReceived == 0) {
         printf("Connection closed by the server\n");
@@ -65,15 +78,11 @@ int receiveFile(SOCKET serverSocket, const char* fileName) {
         wprintf(L"Error details: %s\n", errorMsg);
 
         LocalFree(errorMsg);
-
-        fclose(file);
-        return -1;
     }
 
-    fclose(file);
-    // printf("File received successfully from the server.\n");
-    return 0;
+    return -1;  // Indicate that an error occurred
 }
+
 
 int main(void) {
     WSADATA wsaData;
@@ -177,13 +186,10 @@ int main(void) {
 
         printf("File name '%s' sent to the server.\n", receivedFilePath);
 
-        // Receive the file from the server
-        if (receiveFile(ConnectSocket, receivedFilePath) == 0) {
-            printf("File received successfully from the server.\n");
-        }
-        else {
-            printf("Error receiving file from the server.\n");
-            continue;  // Skip the next steps and go back to the beginning of the loop
+        // Receive the file or error message from the server
+        if (receiveFileOrErrorMessage(ConnectSocket, receivedFilePath) == -1) {
+            // Continue to the next iteration of the loop if an error occurs
+            continue;
         }
 
         // Offer the user the option to request another file or exit
@@ -206,7 +212,7 @@ int main(void) {
 
     } while (true);
 
-    // cleanup
+    // Cleanup
     closesocket(ConnectSocket);
     WSACleanup();
 
